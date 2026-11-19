@@ -2,15 +2,17 @@ mod caches;
 mod docker;
 mod finding;
 mod git;
+mod pick;
 mod util;
 mod walk;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use dialoguer::{Confirm, MultiSelect};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use rayon::prelude::*;
 
 use finding::{Category, Finding};
@@ -60,6 +62,10 @@ struct ScanArgs {
     /// Hide build folders and caches smaller than this many MiB.
     #[arg(long, value_name = "MIB", default_value_t = 10)]
     min_size: u64,
+    /// Skip paths matching this glob, such as '~/src/keep/**' or '**/legacy/**'.
+    /// Repeatable.
+    #[arg(long, value_name = "GLOB")]
+    exclude: Vec<String>,
     /// List every finding instead of the largest per category.
     #[arg(long)]
     all: bool,
@@ -74,7 +80,21 @@ impl ScanArgs {
     }
 }
 
-fn scan(args: &ScanArgs) -> Vec<Finding> {
+fn exclusions(patterns: &[String]) -> Result<GlobSet> {
+    let home = home();
+    let mut set = GlobSetBuilder::new();
+    for pattern in patterns {
+        let expanded = match pattern.strip_prefix("~/") {
+            Some(rest) => format!("{}/{rest}", home.display()),
+            None => pattern.clone(),
+        };
+        set.add(Glob::new(&expanded).with_context(|| format!("invalid --exclude {pattern}"))?);
+    }
+    Ok(set.build()?)
+}
+
+fn scan(args: &ScanArgs) -> Result<Vec<Finding>> {
+    let excluded = exclusions(&args.exclude)?;
     let roots: Vec<PathBuf> = if args.roots.is_empty() {
         vec![std::env::current_dir().unwrap_or_else(|_| ".".into())]
     } else {
@@ -140,10 +160,11 @@ fn scan(args: &ScanArgs) -> Vec<Finding> {
             (Some(min), Some(age)) => age >= min,
             _ => true,
         };
-        size_ok && age_ok
+        let path_ok = f.path.as_ref().is_none_or(|p| !excluded.is_match(p));
+        size_ok && age_ok && path_ok
     });
     findings.sort_by(|a, b| a.category.cmp(&b.category).then(b.bytes.cmp(&a.bytes)));
-    findings
+    Ok(findings)
 }
 
 fn tilde(path: &Path) -> String {
@@ -240,19 +261,45 @@ fn clean(findings: Vec<Finding>, yes: bool, dry_run: bool) -> Result<()> {
         if !std::io::stdin().is_terminal() {
             bail!("not a terminal; pass --yes to clean everything found, or run `scan` instead");
         }
-        let items: Vec<String> = findings
+        let rows = pick::entries(&findings, pick::project_root);
+        let items: Vec<String> = rows
             .iter()
-            .map(|f| format!("[{:?}] {}", f.category, line(f)))
+            .map(|row| match &row.group_root {
+                Some(root) => {
+                    let n = row.indices.len();
+                    let what = format!("{n} build folder{}", if n == 1 { "" } else { "s" });
+                    format!(
+                        "{:<10} {:>10}  {:>5}  {what:<28}  {}",
+                        "[Build]",
+                        human(row.bytes),
+                        "",
+                        tilde(root)
+                    )
+                }
+                None => {
+                    let f = &findings[row.indices[0]];
+                    format!("{:<10} {}", format!("[{:?}]", f.category), line(f))
+                }
+            })
             .collect();
+        let checked: Vec<bool> = rows.iter().map(|row| row.checked).collect();
         let Some(picked) = MultiSelect::new()
-            .with_prompt("Select items to clean (space toggles, a selects all, enter confirms)")
+            .with_prompt(
+                "Build folders are grouped by project and checked; uncheck projects to keep \
+                 (space toggles, enter confirms, esc cancels)",
+            )
             .items(&items)
+            .defaults(&checked)
+            .report(false)
             .max_length(25)
             .interact_opt()?
         else {
             return Ok(());
         };
-        picked.into_iter().map(|i| findings[i].clone()).collect()
+        picked
+            .into_iter()
+            .flat_map(|r| rows[r].indices.iter().map(|&i| findings[i].clone()))
+            .collect()
     };
     if chosen.is_empty() {
         println!("Nothing selected.");
@@ -302,13 +349,13 @@ fn clean(findings: Vec<Finding>, yes: bool, dry_run: bool) -> Result<()> {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Scan(args) => {
-            print_report(&scan(&args), args.all);
+            print_report(&scan(&args)?, args.all);
             Ok(())
         }
         Command::Clean {
             scan: args,
             yes,
             dry_run,
-        } => clean(scan(&args), yes, dry_run),
+        } => clean(scan(&args)?, yes, dry_run),
     }
 }

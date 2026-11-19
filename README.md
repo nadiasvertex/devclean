@@ -49,8 +49,19 @@ Each category lists its 15 largest items. Pass `--all` to list everything.
 ### clean
 
 `devclean clean [ROOTS]...` runs the same scan, then shows a checklist. Use the arrow keys to move,
-space to select an item, `a` to select all, and enter to continue. devclean shows the total and
-asks for confirmation before it runs anything. Press escape to cancel.
+space to check or uncheck a row, `a` to toggle all rows, and enter to continue. devclean shows the
+total and asks for confirmation before it runs anything. Press escape to cancel.
+
+Build folders are grouped into one row per project, meaning the git repository or worktree that
+contains them, so thousands of `bin/` and `obj/` folders become a short list. These rows start
+checked: uncheck the projects whose build output you want to keep. All other rows (worktrees,
+`git gc`, caches, and Docker) start unchecked, so check the ones you want.
+
+To keep a project out of the list entirely, use `--exclude`:
+
+```sh
+devclean clean ~/src --exclude '~/src/active-project/**' --exclude '**/vendor/**'
+```
 
 After cleaning, devclean prints each command as it runs it and reports the space reclaimed. It
 exits with status 1 if any item failed.
@@ -71,6 +82,7 @@ These options apply to both `scan` and `clean`.
 | `--no-global` | Skip tool caches and Docker. |
 | `--older-than <days>` | Only include items untouched for at least this many days. Also sets the idle threshold for worktrees. |
 | `--min-size <MiB>` | Hide build folders and caches smaller than this. The default is 10. |
+| `--exclude <glob>` | Skip findings whose path matches the glob. Repeatable. A leading `~/` means your home directory. Quote the pattern so the shell does not expand it. `dir/**` matches everything under `dir` but not `dir` itself. |
 | `--all` | List every finding instead of the largest 15 per category. |
 
 ## What devclean finds
