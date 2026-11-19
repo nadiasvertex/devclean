@@ -21,11 +21,15 @@ Finds and reclaims disk space used by development artifacts. `scan` reports and 
 
 ```sh
 just install                      # builds and copies to ~/bin
-devclean scan ~/meps                       # report
-devclean scan ~/meps --only build --older-than 60
-devclean clean ~/meps --no-global          # pick and clean, skipping caches and Docker
-devclean clean ~/meps --dry-run            # show the commands without running them
+devclean scan ~/src                       # report
+devclean scan ~/src --only build --older-than 60
+devclean clean ~/src --no-global          # pick and clean, skipping caches and Docker
+devclean clean ~/src --dry-run            # show the commands without running them
 ```
 
 Sizes are on-disk estimates. Docker's estimate includes unused tagged images, which `prune`
 without `-a` keeps.
+
+## License
+
+MIT
