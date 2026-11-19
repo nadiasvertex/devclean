@@ -43,7 +43,7 @@ pub fn entries(findings: &[Finding], root_of: impl Fn(&Path) -> PathBuf) -> Vec<
             group_root: Some(root),
         })
         .collect();
-    out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    out.sort_by_key(|e| std::cmp::Reverse(e.bytes));
     out.extend(singles.into_iter().map(|i| Entry {
         indices: vec![i],
         bytes: findings[i].bytes,
@@ -78,7 +78,7 @@ mod tests {
             finding(Category::Build, "/r/a/src/y/obj", 20),
             finding(Category::Build, "/r/b/bin", 100),
         ];
-        let root_of = |p: &Path| PathBuf::from(p.iter().take(4).collect::<PathBuf>());
+        let root_of = |p: &Path| p.iter().take(4).collect::<PathBuf>();
         let rows = entries(&findings, root_of);
 
         assert_eq!(rows.len(), 3);

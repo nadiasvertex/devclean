@@ -21,8 +21,9 @@ mv devclean-v0.1.0-aarch64-apple-darwin/devclean ~/bin/
 On macOS, a downloaded binary may be blocked by Gatekeeper. Clear the quarantine flag with
 `xattr -d com.apple.quarantine ~/bin/devclean`.
 
-To build from source, install Rust 1.85 or newer, then run `just install` (copies the binary to
-`~/bin`) or `cargo install --path .`.
+To build from source, install [rustup](https://rustup.rs), then run `just install` (copies the binary to
+`~/bin`) or `cargo install --path .`. The repository pins its Rust version in `rust-toolchain.toml`,
+and rustup installs that version on first build.
 
 ## Quick start
 
