@@ -20,7 +20,7 @@ Finds and reclaims disk space used by development artifacts. `scan` reports and 
 ## Usage
 
 ```sh
-cargo install --path .
+just install                      # builds and copies to ~/bin
 devclean scan ~/meps                       # report
 devclean scan ~/meps --only build --older-than 60
 devclean clean ~/meps --no-global          # pick and clean, skipping caches and Docker
