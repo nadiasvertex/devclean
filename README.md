@@ -159,15 +159,19 @@ finding, such as build output inside a stale worktree.
 
 ## Releasing
 
-Update `version` in `Cargo.toml`, commit, then tag and push:
+Raise the version, commit and push the change, then run `just release`:
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
+just bump-version minor   # or major, or patch; updates Cargo.toml and Cargo.lock
+git commit -am "Bump version to 0.2.0"
+git push
+just release              # tags HEAD as v0.2.0 and pushes the tag
 ```
 
-The release workflow tests the code, builds archives for macOS and Linux on arm64 and x86_64, and
-publishes them with SHA-256 checksums on a GitHub release.
+`just release` stops if the tag already exists, if the version change is not committed, or if HEAD
+has not been pushed to `master`. The pushed tag starts the release workflow, which tests the code,
+builds archives for macOS and Linux on arm64 and x86_64, and publishes them with SHA-256 checksums
+on a GitHub release.
 
 ## License
 
