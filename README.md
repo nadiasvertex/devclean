@@ -1,8 +1,8 @@
 # devclean
 
 devclean finds disk space used by development work and helps you reclaim it. It looks for build
-output, stale git worktrees, git repositories that need compacting, tool caches, and unused Docker
-data. `devclean scan` reports what it finds and changes nothing. `devclean clean` lets you choose
+output, stale git worktrees, git repositories that need compacting, tool caches, superseded
+toolchains and emulators, and unused Docker data. `devclean scan` reports what it finds and changes nothing. `devclean clean` lets you choose
 what to remove and asks before it removes anything.
 
 devclean runs on macOS and Linux. Most cache locations it knows about are the macOS ones.
@@ -39,7 +39,7 @@ devclean clean ~/src           # choose items and clean them
 
 `devclean scan [ROOTS]...` searches each root directory and prints findings grouped by category,
 largest first, with an estimated total. With no roots it searches the current directory. Tool
-caches and Docker are machine-wide, so they are reported regardless of the roots.
+caches, toolchains, and Docker are machine-wide, so they are reported regardless of the roots.
 
 Each row shows the estimated size, the age in days (time since the newest file changed, or since
 the last commit for worktrees), the kind of item, and its path. Some rows have a second line that
@@ -56,7 +56,9 @@ total and asks for confirmation before it runs anything. Press escape to cancel.
 Build folders are grouped into one row per project, meaning the git repository or worktree that
 contains them, so thousands of `bin/` and `obj/` folders become a short list. These rows start
 checked: uncheck the projects whose build output you want to keep. All other rows (worktrees,
-`git gc`, caches, and Docker) start unchecked, so check the ones you want.
+`git gc`, caches, toolchains, and Docker) start unchecked, so check the ones you want. Findings that
+need a step devclean does not run, such as removing a .NET SDK with sudo, are listed before the
+checklist instead of in it.
 
 To keep a project out of the list entirely, use `--exclude`:
 
@@ -79,10 +81,10 @@ These options apply to both `scan` and `clean`.
 
 | Option | Effect |
 | --- | --- |
-| `--only <list>` | Limit to these categories, comma-separated: `build`, `worktree`, `git-gc`, `cache`, `docker`. |
-| `--no-global` | Skip tool caches and Docker. |
+| `--only <list>` | Limit to these categories, comma-separated: `build`, `worktree`, `git-gc`, `cache`, `toolchain`, `docker`. |
+| `--no-global` | Skip tool caches, toolchains, and Docker. |
 | `--older-than <days>` | Only include items untouched for at least this many days. Also sets the idle threshold for worktrees. |
-| `--min-size <MiB>` | Hide build folders and caches smaller than this. The default is 10. |
+| `--min-size <MiB>` | Hide build folders, caches, and toolchains smaller than this. The default is 10. |
 | `--exclude <glob>` | Skip findings whose path matches the glob. Repeatable. A leading `~/` means your home directory. Quote the pattern so the shell does not expand it. `dir/**` matches everything under `dir` but not `dir` itself. |
 | `--all` | List every finding instead of the largest 15 per category. |
 
@@ -102,9 +104,19 @@ devclean recognizes build and dependency folders by the project files next to th
 | `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox` | always |
 | `.gradle`, `build` | next to a Gradle build or settings file |
 | `build`, `cmake-build-*` | next to `CMakeLists.txt`, or any `cmake-build-*` folder |
+| any folder | the folder contains `CMakeCache.txt` and no `CMakeLists.txt` |
+| `.build`, `dist`, `.mm` | next to `mmpackage.json` (the `mm` build tool) |
+| `.cache` | next to `compile_commands.json`, `.clangd`, or `CMakeLists.txt`, outside your home folder |
 | `.terraform` | next to a `.tf` file |
 | `.build` | next to `Package.swift` |
 | `.zig-cache`, `zig-cache`, `zig-out` | next to `build.zig` |
+
+devclean also reports LLVM coverage files (`*.profraw`), which test runs built with coverage leave
+in the folder they ran from. These files are grouped into one finding per project. Files that git
+tracks are never reported.
+
+A folder that holds both `CMakeCache.txt` and `CMakeLists.txt` is an in-source build, which is the
+project itself, so devclean does not report it.
 
 Inside a git repository, a folder is only reported if git ignores it. This keeps devclean from
 offering a folder that holds tracked files. Cleaning deletes the folder. Rebuilding or reinstalling
@@ -134,14 +146,36 @@ savings after repacking vary.
 
 ### Tool caches (`cache`)
 
-devclean reports caches for Cargo, npm, Yarn, pnpm, NuGet, Gradle, Maven, Homebrew, Go, pip, uv,
-Playwright, Xcode DerivedData, iOS simulators, Terraform, and JetBrains IDEs. When the tool is
+devclean reports caches for Cargo, npm, npx, Yarn, pnpm, NuGet, Gradle (caches and wrapper
+distributions), Maven, Homebrew, Go, pip, uv, pixi, Coursier, CocoaPods, SwiftPM, Electron,
+node-gyp, Playwright, Xcode DerivedData, iOS simulators, Terraform, Bazel and Bazelisk, ccache,
+sccache, GitHub Copilot (search index and packages), and JetBrains IDEs (caches and logs). When the tool is
 installed, cleaning uses its own command, such as `npm cache clean --force` or
 `dotnet nuget locals all --clear`. Otherwise devclean deletes the cache folder. Tools download what
 they need again on next use.
 
 Some caches have side effects, which the report notes. The Maven repository also holds artifacts
 from `mvn install`, and `brew cleanup` also removes old installed versions.
+
+Removing the Bazel cache resets every Bazel workspace on the machine. Bazel leaves some folders
+read-only, so devclean restores write permission before it deletes them.
+
+### Toolchains and emulators (`toolchain`)
+
+devclean reports installed toolchains that a newer install supersedes or that nothing appears to
+use:
+
+| Item | Reported when | Cleaning |
+| --- | --- | --- |
+| Android emulators | always, one item per emulator in `~/.android/avd` | `avdmanager delete avd`, or deletes the emulator folder |
+| Android NDKs | a newer NDK version is installed | deletes the NDK folder |
+| JetBrains IDE data | a newer version of the same IDE has a data folder | deletes the old version's settings and plugins folder |
+| Rust toolchains | not the default, not active, not a `rustup override`, and not pinned by a `rust-toolchain` file under the roots | `rustup toolchain uninstall` |
+| .NET SDKs | a newer SDK with the same major version is installed | deletes the SDK folder when it is under your home folder; otherwise reports the `dotnet-core-uninstall` command to run with sudo |
+
+Rust pins are read only from the roots you scan, so scan the folders that hold your Rust projects.
+rustup installs a removed toolchain again when a project asks for it. A project that pins an NDK
+version, or a `global.json` that pins an SDK version, needs that version installed again.
 
 ### Docker (`docker`)
 

@@ -17,6 +17,22 @@ fn under_home(rel: &'static str) -> Option<PathBuf> {
     Some(home().join(rel))
 }
 
+/// The per-user cache folder: `~/Library/Caches/<mac>` on macOS, otherwise
+/// `$XDG_CACHE_HOME/<linux>` or `~/.cache/<linux>`.
+fn user_cache(mac: &str, linux: &str) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        return Some(home().join("Library/Caches").join(mac));
+    }
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".cache"));
+    Some(base.join(linux))
+}
+
+fn mac_only(rel: &'static str) -> Option<PathBuf> {
+    cfg!(target_os = "macos").then(|| home().join(rel))
+}
+
 fn specs() -> Vec<CacheSpec> {
     vec![
         CacheSpec {
@@ -126,6 +142,100 @@ fn specs() -> Vec<CacheSpec> {
             path: || under_home("Library/Caches/JetBrains"),
             command: None,
             note: Some("includes caches for old IDE versions"),
+        },
+        CacheSpec {
+            name: "Bazel output and repository cache",
+            path: || user_cache("bazel", "bazel"),
+            command: None,
+            note: Some("every Bazel workspace rebuilds from scratch; run `bazel shutdown` first"),
+        },
+        CacheSpec {
+            name: "Bazelisk downloads",
+            path: || user_cache("bazelisk", "bazelisk"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "ccache",
+            path: || {
+                output("ccache", &["-k", "cache_dir"], None)
+                    .map(PathBuf::from)
+                    .or_else(|| user_cache("ccache", "ccache"))
+            },
+            command: Some(("ccache", &["-C"])),
+            note: Some("the next C and C++ builds compile everything again"),
+        },
+        CacheSpec {
+            name: "sccache",
+            path: || user_cache("Mozilla.sccache", "sccache"),
+            command: None,
+            note: Some("run `sccache --stop-server` first if it is running"),
+        },
+        CacheSpec {
+            name: "JetBrains logs",
+            path: || mac_only("Library/Logs/JetBrains"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "Copilot search index",
+            path: || user_cache("copilot/tgrep-index", "copilot/tgrep-index"),
+            command: None,
+            note: Some("Copilot rebuilds the index when it next searches"),
+        },
+        CacheSpec {
+            name: "Copilot packages",
+            path: || user_cache("copilot/pkg", "copilot/pkg"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "pixi (rattler) cache",
+            path: || user_cache("rattler", "rattler"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "Gradle wrapper distributions",
+            path: || under_home(".gradle/wrapper/dists"),
+            command: None,
+            note: Some("each project downloads its Gradle version again on next build"),
+        },
+        CacheSpec {
+            name: "Coursier cache",
+            path: || user_cache("Coursier", "coursier"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "CocoaPods cache",
+            path: || user_cache("CocoaPods", "CocoaPods"),
+            command: Some(("pod", &["cache", "clean", "--all"])),
+            note: None,
+        },
+        CacheSpec {
+            name: "Electron downloads",
+            path: || user_cache("electron", "electron"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "node-gyp headers",
+            path: || user_cache("node-gyp", "node-gyp"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "npx packages",
+            path: || under_home(".npm/_npx"),
+            command: None,
+            note: None,
+        },
+        CacheSpec {
+            name: "SwiftPM cache",
+            path: || user_cache("org.swift.swiftpm", "org.swift.swiftpm"),
+            command: None,
+            note: None,
         },
     ]
 }
