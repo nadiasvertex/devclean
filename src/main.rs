@@ -3,6 +3,7 @@ mod docker;
 mod finding;
 mod git;
 mod pick;
+mod toolchains;
 mod util;
 mod walk;
 
@@ -15,7 +16,7 @@ use dialoguer::{Confirm, MultiSelect};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rayon::prelude::*;
 
-use finding::{Category, Finding};
+use finding::{Action, Category, Finding};
 use util::{home, human};
 
 #[derive(Parser)]
@@ -52,7 +53,7 @@ struct ScanArgs {
     /// Limit to these categories (comma-separated).
     #[arg(long, value_enum, value_delimiter = ',')]
     only: Vec<Category>,
-    /// Skip machine-wide categories (tool caches and Docker).
+    /// Skip machine-wide categories (tool caches, toolchains, and Docker).
     #[arg(long)]
     no_global: bool,
     /// Only report items untouched for at least this many days.
@@ -104,9 +105,15 @@ fn scan(args: &ScanArgs) -> Result<Vec<Finding>> {
             .collect()
     };
 
-    let needs_walk = [Category::Build, Category::Worktree, Category::GitGc]
-        .into_iter()
-        .any(|c| args.wants(c));
+    // Toolchains need the walk for the `rust-toolchain` pins under the roots.
+    let needs_walk = [
+        Category::Build,
+        Category::Worktree,
+        Category::GitGc,
+        Category::Toolchain,
+    ]
+    .into_iter()
+    .any(|c| args.wants(c));
     let walked = if needs_walk {
         eprintln!(
             "Scanning {} ...",
@@ -118,15 +125,18 @@ fn scan(args: &ScanArgs) -> Result<Vec<Finding>> {
         );
         walk::walk(&roots)
     } else {
-        walk::WalkResult {
-            build_dirs: Vec::new(),
-            repos: Vec::new(),
-        }
+        walk::WalkResult::default()
     };
 
     let mut findings = Vec::new();
     if args.wants(Category::Build) {
         findings.extend(walk::build_findings(walked.build_dirs));
+        let coverage = walked
+            .coverage_files
+            .into_iter()
+            .filter(|f| !excluded.is_match(f))
+            .collect();
+        findings.extend(walk::coverage_findings(coverage));
     }
     let idle_days = args.older_than.unwrap_or(30);
     findings.extend(
@@ -148,14 +158,19 @@ fn scan(args: &ScanArgs) -> Result<Vec<Finding>> {
     if args.wants(Category::Cache) {
         findings.extend(caches::cache_findings());
     }
+    if args.wants(Category::Toolchain) {
+        findings.extend(toolchains::toolchain_findings(&walked.toolchain_files));
+    }
     if args.wants(Category::Docker) {
         findings.extend(docker::docker_findings());
     }
 
     let min_bytes = args.min_size * 1024 * 1024;
     findings.retain(|f| {
-        let size_ok =
-            !matches!(f.category, Category::Build | Category::Cache) || f.bytes >= min_bytes;
+        let size_ok = !matches!(
+            f.category,
+            Category::Build | Category::Cache | Category::Toolchain
+        ) || f.bytes >= min_bytes;
         let age_ok = match (args.older_than, f.age_days) {
             (Some(min), Some(age)) => age >= min,
             _ => true,
@@ -194,8 +209,10 @@ fn total_bytes(findings: &[&Finding]) -> u64 {
         .filter(|f| {
             let Some(path) = &f.path else { return true };
             !findings.iter().any(|outer| {
-                // `git gc` compacts a repo but does not remove its contents.
+                // `git gc` compacts a repo but does not remove its contents, and a
+                // path-list removal does not remove everything under its path.
                 outer.category != Category::GitGc
+                    && !matches!(outer.action, Action::RemovePaths(_))
                     && outer
                         .path
                         .as_ref()
@@ -251,6 +268,15 @@ fn print_report(findings: &[Finding], all: bool) {
 }
 
 fn clean(findings: Vec<Finding>, yes: bool, dry_run: bool) -> Result<()> {
+    let (manual, findings): (Vec<Finding>, Vec<Finding>) =
+        findings.into_iter().partition(|f| f.action.is_manual());
+    if !manual.is_empty() {
+        println!("These need a step devclean does not run:");
+        for f in &manual {
+            println!("  {}  ({})", f.action.describe(), human(f.bytes));
+        }
+        println!();
+    }
     if findings.is_empty() {
         println!("Nothing to clean.");
         return Ok(());

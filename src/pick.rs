@@ -12,10 +12,10 @@ pub struct Entry {
     pub group_root: Option<PathBuf>,
 }
 
-/// The nearest enclosing git work tree (repo or linked worktree), else the parent folder.
+/// The nearest git work tree (repo or linked worktree) at or above the path, else the
+/// parent folder.
 pub fn project_root(path: &Path) -> PathBuf {
     path.ancestors()
-        .skip(1)
         .find(|dir| dir.join(".git").exists())
         .or_else(|| path.parent())
         .unwrap_or(path)
